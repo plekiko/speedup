@@ -12,6 +12,30 @@ def die(msg: str, code: int = 1) -> None:
     print(f"Error: {msg}", file=sys.stderr)
     sys.exit(code)
 
+def parse_hms(value: str) -> float:
+    """
+    Accepts:
+      SS
+      MM:SS
+      HH:MM:SS
+    (seconds may be fractional)
+    """
+    parts = value.split(":")
+    try:
+        parts = [float(p) for p in parts]
+    except ValueError:
+        die(f"Invalid time format: {value}")
+
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        m, s = parts
+        return m * 60 + s
+    if len(parts) == 3:
+        h, m, s = parts
+        return h * 3600 + m * 60 + s
+
+    die(f"Invalid time format: {value}")
 
 def fmt_time(seconds: float) -> str:
     seconds = max(0, int(seconds))
@@ -125,9 +149,8 @@ class FileDirectives:
     clean_stem: str
 
 
-_START_RE = re.compile(r"--start=([0-9]+(?:\.[0-9]+)?)")
-_END_RE = re.compile(r"--end=([0-9]+(?:\.[0-9]+)?)")
-
+_START_RE = re.compile(r"--start=([0-9]+(?:[_:][0-9]+){0,2}(?:\.[0-9]+)?)")
+_END_RE   = re.compile(r"--end=([0-9]+(?:[_:][0-9]+){0,2}(?:\.[0-9]+)?)")
 
 def parse_filename_directives(path: Path) -> FileDirectives:
     stem = path.stem
@@ -139,11 +162,13 @@ def parse_filename_directives(path: Path) -> FileDirectives:
 
     m = _START_RE.search(stem)
     if m:
-        start = float(m.group(1))
+        raw = m.group(1).replace("_", ":")
+        start = parse_hms(raw)
 
     m = _END_RE.search(stem)
     if m:
-        end = float(m.group(1))
+        raw = m.group(1).replace("_", ":")
+        end = parse_hms(raw)
 
     # Clean output name: remove directives from filename
     clean = stem
@@ -298,8 +323,8 @@ def main() -> None:
     p.add_argument("input", type=Path, help="Input .mp4 file OR a folder containing .mp4 files")
     p.add_argument("output", type=Path, nargs="?", help="Output file (single-file mode). Ignored in folder mode.")
     p.add_argument("--out-dir", type=Path, help="Folder mode: where to write outputs (default: <input>/_processed)")
-    p.add_argument("--start", type=float, help="Single-file mode: start seconds")
-    p.add_argument("--end", type=float, help="Single-file mode: end seconds")
+    p.add_argument("--start", type=parse_hms, help="Single-file mode: start (SS, MM:SS, or HH:MM:SS)")
+    p.add_argument("--end", type=parse_hms, help="Single-file mode: end (SS, MM:SS, or HH:MM:SS)")
     p.add_argument("--speed", type=float, required=True)
     p.add_argument("--fps-normal", type=int, default=60, help="FPS for unprocessed parts (default: 60)")
     p.add_argument("--fps-fast", type=int, default=60, help="FPS used while generating the sped-up part (default: 60)")

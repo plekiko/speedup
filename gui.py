@@ -92,11 +92,11 @@ class App(tk.Tk):
             row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
         )
 
-        ttk.Label(opts, text="Start (s):").grid(row=2, column=2, sticky="w", padx=(18, 0))
+        ttk.Label(opts, text="Start (SS/MM:SS/HH:MM:SS):").grid(row=2, column=2, sticky="w", padx=(18, 0))
         self.start_entry = ttk.Entry(opts, textvariable=self.start, width=10)
         self.start_entry.grid(row=2, column=3, sticky="w")
 
-        ttk.Label(opts, text="End (s):").grid(row=2, column=4, sticky="w", padx=(18, 0))
+        ttk.Label(opts, text="End (SS/MM:SS/HH:MM:SS):").grid(row=2, column=4, sticky="w", padx=(18, 0))
         self.end_entry = ttk.Entry(opts, textvariable=self.end, width=10)
         self.end_entry.grid(row=2, column=5, sticky="w")
 
