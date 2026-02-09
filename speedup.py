@@ -347,7 +347,8 @@ def main() -> None:
         out_dir = args.out_dir or (in_dir / "_processed")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        mp4s = sorted(in_dir.glob("*.mp4"))
+        mp4s = sorted(in_dir.rglob("*.mp4"))
+
         if not mp4s:
             die(f"No .mp4 files found in folder: {in_dir}")
 
@@ -361,8 +362,12 @@ def main() -> None:
                 skipped += 1
                 continue
 
+            rel_parent = mp4.parent.relative_to(in_dir)  # subfolder path inside input dir
+            target_dir = out_dir / rel_parent
+            target_dir.mkdir(parents=True, exist_ok=True)
+
             out_name = f"{d.clean_stem}.mp4"
-            out_path = out_dir / out_name
+            out_path = target_dir / out_name
 
             # If you want to avoid overwriting, uncomment:
             # if out_path.exists():
