@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-
 def die(msg: str, code: int = 1) -> None:
     print(f"Error: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -206,9 +205,28 @@ def build_ffmpeg_cmd(
     preset: str,
     start: float | None,
     end: float | None,
+    hw: str,
+    hwaccel: bool,
 ) -> tuple[list[str], float]:
     in_dur = ffprobe_duration_seconds(input_path)
     partial = start is not None or end is not None
+
+    def vcodec_args() -> list[str]:
+        if hw == "none":
+            return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+        if hw == "nvenc":
+            # NVENC: map crf -> cq; preset must be nvenc preset (p1..p7)
+            # Use p5 as a good default.
+            return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf)]
+        if hw == "qsv":
+            # Intel QSV quality knob
+            return ["-c:v", "h264_qsv", "-global_quality", str(crf)]
+        if hw == "amf":
+            # AMD AMF: use QP-ish controls (rough mapping)
+            return ["-c:v", "h264_amf", "-quality", "balanced",
+                    "-qp_i", str(crf), "-qp_p", str(crf), "-qp_b", str(crf)]
+        die(f"Unknown --hw value: {hw}")
+
 
     base_cmd = [
         "ffmpeg",
@@ -218,8 +236,21 @@ def build_ffmpeg_cmd(
         "-loglevel", "error",
         "-nostats",
         "-progress", "pipe:1",
-        "-i", str(input_path),
     ]
+
+    if hwaccel:
+        if hw == "nvenc":
+            base_cmd += ["-hwaccel", "cuda"]
+        elif hw == "qsv":
+            base_cmd += ["-hwaccel", "qsv"]
+        elif hw == "amf":
+            # Often works on Windows; harmless elsewhere if unsupported
+            base_cmd += ["-hwaccel", "d3d11va"]
+        else:
+            # if hwaccel requested but hw=none, pick a generic accel attempt
+            base_cmd += ["-hwaccel", "auto"]
+
+    base_cmd += ["-i", str(input_path)]
 
     if partial:
         s = start or 0.0
@@ -258,11 +289,10 @@ def build_ffmpeg_cmd(
             "-filter_complex", vf if af is None else vf + ";" + af,
             "-map", "[v]",
             "-vsync", "cfr",
-            "-c:v", "libx264",
-            "-preset", preset,
-            "-crf", str(crf),
+        ] + vcodec_args() + [
             "-movflags", "+faststart",
         ]
+
 
         if no_audio:
             cmd += ["-an"]
@@ -276,11 +306,10 @@ def build_ffmpeg_cmd(
         cmd = base_cmd + [
             "-filter:v", vfilter,
             "-vsync", "cfr",
-            "-c:v", "libx264",
-            "-preset", preset,
-            "-crf", str(crf),
+        ] + vcodec_args() + [
             "-movflags", "+faststart",
         ]
+
 
         if no_audio:
             cmd += ["-an"]
@@ -311,7 +340,10 @@ def process_one(
         preset=args.preset,
         start=start_override,
         end=end_override,
+        hw=args.hw,
+        hwaccel=args.hwaccel,
     )
+
 
     total = run_ffmpeg_with_progress(cmd, expected)
     print(f"Done in {fmt_time(total)}")
@@ -331,6 +363,11 @@ def main() -> None:
     p.add_argument("--no-audio", action="store_true")
     p.add_argument("--crf", type=int, default=20)
     p.add_argument("--preset", default="medium")
+    p.add_argument("--hw", choices=["none", "nvenc", "qsv", "amf"], default="none",
+              help="Hardware encoder (default: none)")
+    p.add_argument("--hwaccel", action="store_true",
+                help="Try GPU-accelerated decoding (when supported)")
+
     args = p.parse_args()
 
     if args.speed <= 0:

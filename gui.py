@@ -5,6 +5,8 @@ import subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
+import signal
+
 
 def find_python() -> str:
     # Use the same interpreter that launched the GUI
@@ -34,6 +36,9 @@ class App(tk.Tk):
         self.no_audio = tk.BooleanVar(value=True)
         self.start = tk.StringVar(value="")
         self.end = tk.StringVar(value="")
+
+        self.hw = tk.StringVar(value="none")
+        self.hwaccel = tk.BooleanVar(value=False)
 
         self.proc = None
         self._build_ui()
@@ -83,22 +88,42 @@ class App(tk.Tk):
         ttk.Entry(opts, textvariable=self.crf, width=10).grid(row=1, column=1, sticky="w")
 
         ttk.Label(opts, text="Preset:").grid(row=1, column=2, sticky="w", padx=(18, 0))
-        ttk.Combobox(opts, textvariable=self.preset, width=12, state="readonly",
-                     values=["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow"]).grid(
-            row=1, column=3, sticky="w"
-        )
+        ttk.Combobox(
+            opts,
+            textvariable=self.preset,
+            width=12,
+            state="readonly",
+            values=["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow"],
+        ).grid(row=1, column=3, sticky="w")
 
+
+        # Row 2: audio + GPU options
         ttk.Checkbutton(opts, text="No audio (global)", variable=self.no_audio).grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(6, 0)
         )
 
-        ttk.Label(opts, text="Start (SS/MM:SS/HH:MM:SS):").grid(row=2, column=2, sticky="w", padx=(18, 0))
-        self.start_entry = ttk.Entry(opts, textvariable=self.start, width=10)
-        self.start_entry.grid(row=2, column=3, sticky="w")
+        ttk.Label(opts, text="HW encode:").grid(row=2, column=2, sticky="w", padx=(18, 0))
+        ttk.Combobox(
+            opts,
+            textvariable=self.hw,
+            width=12,
+            state="readonly",
+            values=["none", "nvenc", "qsv", "amf"],
+        ).grid(row=2, column=3, sticky="w")
 
-        ttk.Label(opts, text="End (SS/MM:SS/HH:MM:SS):").grid(row=2, column=4, sticky="w", padx=(18, 0))
+        ttk.Checkbutton(opts, text="HW decode accel", variable=self.hwaccel).grid(
+            row=2, column=4, columnspan=2, sticky="w", padx=(18, 0)
+        )
+
+
+        # Row 3: start/end (single-file mode)
+        ttk.Label(opts, text="Start (SS/MM:SS/HH:MM:SS):").grid(row=3, column=2, sticky="w", padx=(18, 0))
+        self.start_entry = ttk.Entry(opts, textvariable=self.start, width=10)
+        self.start_entry.grid(row=3, column=3, sticky="w")
+
+        ttk.Label(opts, text="End (SS/MM:SS/HH:MM:SS):").grid(row=3, column=4, sticky="w", padx=(18, 0))
         self.end_entry = ttk.Entry(opts, textvariable=self.end, width=10)
-        self.end_entry.grid(row=2, column=5, sticky="w")
+        self.end_entry.grid(row=3, column=5, sticky="w")
 
 
         btns = ttk.Frame(self)
@@ -184,6 +209,11 @@ class App(tk.Tk):
         cmd += ["--crf", self.crf.get().strip()]
         cmd += ["--preset", self.preset.get().strip()]
 
+        cmd += ["--hw", self.hw.get().strip()]
+        if self.hwaccel.get():
+            cmd += ["--hwaccel"]
+
+
         if self.mode.get() == "file":
             s = self.start.get().strip()
             e = self.end.get().strip()
@@ -214,14 +244,24 @@ class App(tk.Tk):
 
         def worker():
             try:
+                creationflags = 0
+                popen_kwargs = {}
+
+                if os.name == "nt":
+                    creationflags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                else:
+                    popen_kwargs["start_new_session"] = True  # puts it in its own process group
+
                 self.proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
                     bufsize=1,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                    creationflags=creationflags,
+                    **popen_kwargs,
                 )
+
                 assert self.proc.stdout is not None
                 for line in self.proc.stdout:
                     self.after(0, self._append_log, line)
@@ -243,11 +283,37 @@ class App(tk.Tk):
     def _stop(self):
         if self.proc is None:
             return
+
+        pid = self.proc.pid
         try:
-            self.proc.terminate()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                # Try graceful group kill
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                except Exception:
+                    pass
+
+                # Give it a moment, then hard-kill if still alive
+                try:
+                    self.proc.wait(timeout=0.5)
+                except Exception:
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    except Exception:
+                        pass
+
             self._append_log("\n[terminated]\n")
         except Exception as e:
             self._append_log(f"\n[stop error] {e}\n")
+
+
 
 
 if __name__ == "__main__":
